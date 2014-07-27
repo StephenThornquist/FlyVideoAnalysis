@@ -57,8 +57,7 @@ end
 for k = 1:length(video)
     currVid = video(k);
     nframe = currVid.NumberOfFrames;
-    
-    clear props; % This step seems needed no matter what
+    currVidFrames = read(currVid);
     props(1:nfly,1:nframe)=struct('Area',[],'Centroid',zeros(1,2,'double'),...
         'MajorAxisLength',[],'MinorAxisLength',[],'Eccentricity',[],...
         'Orientation',[]);
