@@ -1,4 +1,4 @@
-function [rawData, summaryStats, flyHMMs] = actogramAnalysis(vargin)
+function [rawData, summaryStats, flyHMMs] = actogramAnalysis(varargin)
 % ACTOGRAMANALYSIS  Makes an actogram out of text files
 %
 %    [RAWDATA, SUMMARYSTATS, FLYHMMS] = ACTOGRAMANALYSIS opens a GUI where
@@ -33,7 +33,7 @@ function [rawData, summaryStats, flyHMMs] = actogramAnalysis(vargin)
 % Default setting: no actograms.
 actogram = 0;
 
-% First check to see if the vargin field is blank
+% First check to see if the varargin field is blank
 
 if(nargin == 0)
     [filenames,pathnames] = uigetfile('*.txt', 'Multiselect','on');
@@ -46,14 +46,24 @@ if(nargin == 0)
     end
 
 % If it isn't, import the data specified on the command line
-elseif(strcmpi(vargin{1},'actogram'))
+elseif(strcmpi(varargin{1},'actogram'))
     actogram = 1;
+    if(nargin == 1)
+        [filenames,pathnames] = uigetfile('*.txt', 'Multiselect','on');
+        if(ischar(filenames))
+            dataIn = importdata([pathnames,filenames]);
+        else    
+          for j = 1:length(filenames)
+             dataIn(j) = importdata([pathnames,filenames{j}]);
+          end
+        end
+    end
     for j = 2:nargin
-        dataIn(j-1) = importdata(vargin(j));
+        dataIn(j-1) = importdata(varargin(j));
     end
 else
     for j = 1:nargin
-        dataIn(j) = importdata(vargin(j));
+        dataIn(j) = importdata(varargin(j));
     end
 end
 
@@ -109,7 +119,7 @@ for j = 1:numFlies
     flyNumData = rawData(:,j);
     % Find candidate sleep bins
     candSleep = find(flyNumData == 0);
-    % Number of minutes a bout lasts (you define this)
+    % Minimum number of minutes a bout lasts (you define this)
     boutDuration = 5;
     boutBins{j} = candSleep(find(candSleep(1+boutDuration:end)-...
         candSleep(1:end-boutDuration) == boutDuration));
@@ -190,7 +200,9 @@ for j = 1:numFlies
     
     awakeState.lambda = meanActivity(j);
     
-    %
+    % VITERBI algorithm goes here:
+    
+    % Bayesian updating on VITERBI:
     
     flyHMMs{j,1} = awakeState; flyHMMs{j,2} = deepState; flyHMMs{j,3} = fitfulState;
 end    
@@ -225,7 +237,7 @@ if (actogram == true)
                 boutTimes <= bpd*k) - (bpd*(k-1));
             maxNum = max(todaysData);
             awakeTimes = todaysData > 0;
-            slp = bar(ticks,(maxNum+1)*awakeTimes,...
+            wake = bar(ticks,(maxNum+1)*awakeTimes,...
                 'FaceColor', [238/255,121/255,159/255],'EdgeColor','none','BarWidth',1);
             hold on;
             bts = bar(todaysBouts, (maxNum+1)*ones(length(todaysBouts),1), ...
