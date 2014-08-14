@@ -1,9 +1,11 @@
 function [rawData, summaryStats, flyHMMs] = actogramAnalysis(varargin)
-% ACTOGRAMANALYSIS  Makes an actogram out of text files
+% ACTOGRAMANALYSIS  Makes an actogram out of text files and returns Hidden
+% Markov Model parameters describing each individual fly's sleep patterns.
 %
 %    [RAWDATA, SUMMARYSTATS, FLYHMMS] = ACTOGRAMANALYSIS opens a GUI where
 %    you select your .txt files and returns the raw numerical activity data
-%    as RAWDATA and the data summary statistics as SUMMARYSTATS.
+%    as RAWDATA and the data summary statistics as SUMMARYSTATS. The HMM
+%    for each fly is returned as FLYHMMS.
 %
 %    [RAWDATA, SUMMARYSTATS, FLYHMMS] = ACTOGRAMANALYSIS('actogram') opens
 %    a GUI where you select your .txt files and returns the raw numerical
@@ -22,6 +24,9 @@ function [rawData, summaryStats, flyHMMs] = actogramAnalysis(varargin)
 %    actograms, so if the script doesn't work, make sure there haven't been
 %    any major changes.
 %
+%    Some of the summary statistics about bout lengths still need have
+%    kinks that need to be worked out. I'll get to it soon (08/13/2014)
+%
 %    If the argument field is left blank, this will bring you to the GUI so
 %    you can click the file(s) you want. Otherwise, type the path of the
 %    files you want to analyze here.
@@ -39,23 +44,23 @@ if(nargin == 0)
     [filenames,pathnames] = uigetfile('*.txt', 'Multiselect','on');
     if(ischar(filenames))
         dataIn = importdata([pathnames,filenames]);
-    else    
+    else
         for j = 1:length(filenames)
             dataIn(j) = importdata([pathnames,filenames{j}]);
         end
     end
-
-% If it isn't, import the data specified on the command line
+    
+    % If it isn't, import the data specified on the command line
 elseif(strcmpi(varargin{1},'actogram'))
     actogram = 1;
     if(nargin == 1)
         [filenames,pathnames] = uigetfile('*.txt', 'Multiselect','on');
         if(ischar(filenames))
             dataIn = importdata([pathnames,filenames]);
-        else    
-          for j = 1:length(filenames)
-             dataIn(j) = importdata([pathnames,filenames{j}]);
-          end
+        else
+            for j = 1:length(filenames)
+                dataIn(j) = importdata([pathnames,filenames{j}]);
+            end
         end
     end
     for j = 2:nargin
@@ -97,8 +102,8 @@ clear txtdata
 % and a "shallow" or "restless" stage. We do this for each fly separately.
 %
 % excluding transitions back to itself:
-%   
-%    Deep  <---->  Shallow <----> Awake
+%
+%    Deep  <---->  Fitful  <----> Awake
 %
 % We have to separate on a fly-by-fly basis because they all will have a
 % different total number of sleep bins.
@@ -142,7 +147,7 @@ meanWakeBouts = zeros(numFlies,1);
 for j = 1:numFlies
     thisFlyBouts = boutBins{j};
     % For pesky tubes with dead flies
-    if(isempty(find(rawData(:,j),1)))    
+    if(isempty(find(rawData(:,j),1)))
     else
         % Start by looking for where there are abrupt changes in the fly
         % bout indices (i.e. going from one bout to the next)
@@ -158,8 +163,9 @@ for j = 1:numFlies
         if(boutEnds(end) < boutStarts(end))
             boutEnds = [boutEnds; thisFlyBouts(end)];
         end
+        % FIXME: THIS PART IS BAD, I NEED TO FIGURE IT OUT
         individualBoutLengths{j} = boutEnds-boutStarts;
-        individualWakeBouts{j} = boutStarts-boutEnds;
+        individualWakeBouts{j} = boutStarts(2:end)-boutEnds(1:end-1);
         meanSleepBouts(j) = mean(individualBoutLengths{j});
         meanWakeBouts(j) = mean(individualWakeBouts{j});
     end
@@ -173,16 +179,20 @@ summaryStats.meanActivity = meanActivity;
 
 % Build an HMM for activity readouts for each fly (sure to be trouble, will
 % debug as I go along. -SCT 07/26/2014).
-flyHMMs = cell(numFlies,3);
+flyHMMs = cell(numFlies,4);
 for j = 1:numFlies
+    disp(['Analyzing fly number ', num2str(j)]);
     awakeState = struct();
     deepState = struct();
     fitfulState = struct();
-
-    % Initialize descriptors with our priors
-    awakeState.transitionProbs = [1/meanWakeBouts, 1 - 1/meanWakeBouts, 0];
-    fitfulState.transitionProbs = [1 - 1/meanSleepBouts, 1/(2*meanSleepBouts), 1/(2*meanSleepBouts)];
-    deepState.transitionProbs = [0, .5, .5];
+    maxCrosses = max(rawData(rawData(:,j)>0,j));
+    
+    % Initialize descriptors with our priors. This part is a little tricky:
+    % we might reasonably expect the duration of one continuous phase to be
+    % its 1/its-self-transition-probability minutes. But obviously not all sleep or wake bouts are created equal.
+    awakeState.transitionProbs = [1/meanWakeBouts(j), 1 - 1/meanWakeBouts(j), 0];
+    fitfulState.transitionProbs = [1 - 1/meanSleepBouts(j), 1/(2*meanSleepBouts(j)), 1/(2*meanSleepBouts(j))];
+    deepState.transitionProbs = [0, .05, .95];
     
     % We model the activity output for the awake state as a Poisson process
     % (this assumes that the activity when awake at night is the same as
@@ -192,20 +202,44 @@ for j = 1:numFlies
     % observing x bouts is:
     %
     % p(x) = e^(-lambda)*(lambda^x)/x!
-    % 
-    % As our prior, we assume that the fly is only  awake during the bins
+    %
+    % As our prior, we assume that the fly is only awake during the bins
     % in which there is a nonzero level of activity. We also assume that
     % sleeping flies do not have any activity. If X~Poiss(lambda), E[X] =
     % lambda.
     
     awakeState.lambda = meanActivity(j);
     
-    % VITERBI algorithm goes here:
+    awakeState.emission = exp(-awakeState.lambda)*awakeState.lambda.^...
+        [0:1:maxCrosses]./factorial(0:1:maxCrosses);
     
-    % Bayesian updating on VITERBI:
+    fitfulState.emission = [1,0*[1:maxCrosses]];
     
-    flyHMMs{j,1} = awakeState; flyHMMs{j,2} = deepState; flyHMMs{j,3} = fitfulState;
-end    
+    deepState.emission = fitfulState.emission;
+    
+    transGuess = [awakeState.transitionProbs; fitfulState.transitionProbs;...
+        deepState.transitionProbs];
+    
+    emisGuess =[awakeState.emission; fitfulState.emission; deepState.emission];
+    
+    % +1 because hmmtrain only works for sequences of ints >= 1
+    
+    [tranEst, emisEst] = hmmtrain(rawData(:,j)+1,transGuess,emisGuess,...
+        'VERBOSE', true);
+    
+    awakeState.transitionProbs = tranEst(1,:);
+    awakeState.emission = emisEst(1,:);
+    fitfulState.transitionProbs = tranEst(2,:);
+    fitfulState.emission = emisEst(2,:);
+    deepState.transitionProbs = tranEst(3,:);
+    deepState.emission = emisEst(3,:);
+    
+    flyHMMs{j,1} = awakeState;
+    flyHMMs{j,2} = fitfulState;
+    flyHMMs{j,3} = deepState;
+    % FIXME: DECODE SYMBOL SET PROBLEM ? ? ? ? ? ?
+    flyHMMs{j,4} = hmmdecode(rawData(:,j)+1,tranEst,emisEst);
+end
 
 
 %% Create an actogram
