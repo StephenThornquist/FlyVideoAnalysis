@@ -126,8 +126,8 @@ for j = 1:numFlies
     candSleep = find(flyNumData == 0);
     % Minimum number of minutes a bout lasts (you define this)
     boutDuration = 5;
-    boutBins{j} = candSleep(find(candSleep(1+boutDuration:end)-...
-        candSleep(1:end-boutDuration) == boutDuration));
+    boutBins{j} = candSleep(candSleep(1+boutDuration:end)-...
+        candSleep(1:end-boutDuration) == boutDuration);
     timeAsleepPerDay(j) = length(boutBins{j})*durs(j)/numDays(j);
     meanActivity(j) = mean(flyNumData(flyNumData > 0));
 end
@@ -149,23 +149,15 @@ for j = 1:numFlies
     % For pesky tubes with dead flies
     if(isempty(find(rawData(:,j),1)))
     else
-        % Start by looking for where there are abrupt changes in the fly
-        % bout indices (i.e. going from one bout to the next)
-        transitionIndices = find(thisFlyBouts(2:end)-thisFlyBouts(1:end-1) > 1);
-        % This array actually gave us indices which are right before the
-        % jump (so they're the ends of bouts)
-        if(transitionIndices(1) == 1)
-            boutStarts = [transitionIndices(1); thisFlyBouts(transitionIndices(2:end)-1)];
-        else
-            boutStarts = [thisFlyBouts(1); thisFlyBouts(transitionIndices(1:end-1)-1)];
-        end
-        boutEnds = thisFlyBouts(transitionIndices);
-        if(boutEnds(end) < boutStarts(end))
-            boutEnds = [boutEnds; thisFlyBouts(end)];
-        end
-        % FIXME: THIS PART IS BAD, I NEED TO FIGURE IT OUT
-        individualBoutLengths{j} = boutEnds-boutStarts;
-        individualWakeBouts{j} = boutStarts(2:end)-boutEnds(1:end-1);
+        
+        % FIXME: THIS PART IS BAD, I NEED TO FIGURE IT OUT ???
+        % Find where there is an abrupt jump in the bout bins.
+        boutStarts = thisFlyBouts([thisFlyBouts(2:end)-thisFlyBouts(1:end-1) > 1;false]);
+
+        boutEnds = thisFlyBouts([false;[0;thisFlyBouts(2:end)]-[0;thisFlyBouts(1:end-1)] > 1]);
+
+        individualBoutLengths{j} = (boutEnds-boutStarts)*durs(j);
+        individualWakeBouts{j} = (boutStarts(2:end)-boutEnds(1:end-1))*durs(j);
         meanSleepBouts(j) = mean(individualBoutLengths{j});
         meanWakeBouts(j) = mean(individualWakeBouts{j});
     end
@@ -192,7 +184,9 @@ for j = 1:numFlies
     % its 1/its-self-transition-probability minutes. But obviously not all sleep or wake bouts are created equal.
     awakeState.transitionProbs = [1/meanWakeBouts(j), 1 - 1/meanWakeBouts(j), 0];
     fitfulState.transitionProbs = [1 - 1/meanSleepBouts(j), 1/(2*meanSleepBouts(j)), 1/(2*meanSleepBouts(j))];
-    deepState.transitionProbs = [0, .05, .95];
+    deepState.transitionProbs = [0, .5, .5];
+    
+    
     
     % We model the activity output for the awake state as a Poisson process
     % (this assumes that the activity when awake at night is the same as
@@ -213,7 +207,7 @@ for j = 1:numFlies
     awakeState.emission = exp(-awakeState.lambda)*awakeState.lambda.^...
         [0:1:maxCrosses]./factorial(0:1:maxCrosses);
     
-    fitfulState.emission = [1,0*[1:maxCrosses]];
+    fitfulState.emission = [1,0*(1:maxCrosses)];
     
     deepState.emission = fitfulState.emission;
     
@@ -224,8 +218,7 @@ for j = 1:numFlies
     
     % +1 because hmmtrain only works for sequences of ints >= 1
     
-    [tranEst, emisEst] = hmmtrain(rawData(:,j)+1,transGuess,emisGuess,...
-        'VERBOSE', true);
+   [tranEst, emisEst] = hmmtrain((rawData(:,j)+1)',transGuess,emisGuess);
     
     awakeState.transitionProbs = tranEst(1,:);
     awakeState.emission = emisEst(1,:);
@@ -237,14 +230,17 @@ for j = 1:numFlies
     flyHMMs{j,1} = awakeState;
     flyHMMs{j,2} = fitfulState;
     flyHMMs{j,3} = deepState;
-    % FIXME: DECODE SYMBOL SET PROBLEM ? ? ? ? ? ?
-    flyHMMs{j,4} = hmmdecode(rawData(:,j)+1,tranEst,emisEst);
+    flyHMMs{j,4} = hmmdecode((rawData(:,j)+1)',tranEst,emisEst);
+    
 end
 
 
 %% Create an actogram
 if (actogram == true)
     for i = 1:numFlies
+        % Find the likelihood of the HMM states of the fly at each time point
+        thisFlyDecode = flyHMMs{i,4};
+%        [dummyVar, mostLikelyState] = max(flyHMMs{i,4});
         % A new figure for every fly
         figure;
         % A fix for the whole 'one file means the names aren't a cell'
@@ -263,20 +259,37 @@ if (actogram == true)
             % And a new subplot for every day
             subplot(numDays(i),1,k)
             todaysData = rawData(1+(bpd*(k-1)):bpd*k,i);
+%            todaysStates = mostLikelyState(:,1+(bpd*(k-1)):bpd*k);
+            todaysStates = thisFlyDecode(:,1+(bpd*(k-1)):bpd*k);
             % Now we plot the actual actogram
             ticks = (1:bpd)*durs(i);
             % This is for making a blue background for bouts and a red
             % background during non-sleep
-            todaysBouts = boutTimes(1+(bpd*(k-1)) <= boutTimes & ...
-                boutTimes <= bpd*k) - (bpd*(k-1));
+
             maxNum = max(todaysData);
-            awakeTimes = todaysData > 0;
-            wake = bar(ticks,(maxNum+1)*awakeTimes,...
-                'FaceColor', [238/255,121/255,159/255],'EdgeColor','none','BarWidth',1);
+            wakecolor(1,1,:) = [238/255,121/255,159/255];
+            deepcolor(1,1,:) = [144/255,230/255,230/255];
+            fitcolor(1,1,:)  = [153/255,153/255,255/255];
+            % Mix the colors by their percent likelihood of being in each
+            % state. this is a sloppy implementation but I didn't feel like
+            % being clever here
+            awakes = repmat(wakecolor,[1,size(todaysStates,2),1]).*repmat(todaysStates(1,:),[1,1,3]);
+            deeps = repmat(deepcolor,[1,size(todaysStates,2),1]).*repmat(todaysStates(3,:),[1,1,3]);
+            fits = repmat(fitcolor,[1,size(todaysStates,2),1]).*repmat(todaysStates(2,:),[1,1,3]);
+            colormat = awakes + ...
+                deeps + ...
+                fits;
+%            wake = bar(ticks(todaysStates==1),(maxNum+1)*ones(length(todaysStates(todaysStates==1)),1),...
+%                'FaceColor', wakecolor,'EdgeColor','none','BarWidth',1);
+%            hold on;
+%            deep = bar(ticks(todaysStates==3), (maxNum+1)*ones(length(todaysStates(todaysStates==3)),1), ...
+%                'FaceColor', deepcolor, ...
+%                'EdgeColor', 'none', 'BarWidth', 1);
+%            fit = bar(ticks(todaysStates==2),(maxNum+1)*ones(length(todaysStates(todaysStates==2)),1),...
+%                'FaceColor', fitcolor,'EdgeColor','none','BarWidth',1);
+            bkgbars = bar(ticks,maxNum+1*ones(length(ticks),1),'hist');
+            set(bkgbars,'CData',colormat);
             hold on;
-            bts = bar(todaysBouts, (maxNum+1)*ones(length(todaysBouts),1), ...
-                'FaceColor', [144/255,230/255,230/255], ...
-                'EdgeColor', 'none', 'BarWidth', 1);
             % plotting the actual data
             foreg = bar(ticks,todaysData,'k');
             xlim([0,1440]);
@@ -288,6 +301,8 @@ if (actogram == true)
             %object set(pcg,'FaceAlpha',.4); % set transparencies
         end
         xlabel('Minutes into day');
+        figure;
+        plot3(todaysStates(1,:),todaysStates(2,:),todaysStates(1,:)),'.';
     end
 end
 
